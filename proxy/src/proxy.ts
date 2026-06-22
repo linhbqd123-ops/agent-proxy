@@ -50,6 +50,85 @@ function parseBodyContent(body: Buffer | null | string): string | object | null 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Extract prompt, completion, and total tokens from response body
+// ─────────────────────────────────────────────────────────────────────────────
+interface TokenUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+function extractTokenUsage(responseBody: string, isStreaming: boolean): TokenUsage {
+  const result = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  if (!responseBody) return result;
+
+  if (isStreaming) {
+    const lines = responseBody.split('\n');
+    // Read reverse or forward. SSE streaming usage is in one of the final data lines.
+    // Loop backwards for faster lookup of final usage.
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6).trim();
+        if (jsonStr === '[DONE]') continue;
+        try {
+          const obj = JSON.parse(jsonStr);
+          if (obj) {
+            if (obj.usage) {
+              result.prompt_tokens = Number(obj.usage.prompt_tokens || 0);
+              result.completion_tokens = Number(obj.usage.completion_tokens || 0);
+              result.total_tokens = Number(obj.usage.total_tokens || 0);
+              break; // found the usage details block
+            } else if (obj.copilot_usage && Array.isArray(obj.copilot_usage.token_details)) {
+              let input = 0, output = 0;
+              for (const item of obj.copilot_usage.token_details) {
+                if (item.token_type === 'input' || item.token_type === 'cache_read' || item.token_type === 'cache_write') {
+                  input += Number(item.token_count || 0);
+                } else if (item.token_type === 'output') {
+                  output += Number(item.token_count || 0);
+                }
+              }
+              result.prompt_tokens = input;
+              result.completion_tokens = output;
+              result.total_tokens = input + output;
+              break; // found the usage details block
+            }
+          }
+        } catch {
+          // ignore parsing error for individual lines
+        }
+      }
+    }
+  } else {
+    try {
+      const obj = JSON.parse(responseBody);
+      if (obj) {
+        if (obj.usage) {
+          result.prompt_tokens = Number(obj.usage.prompt_tokens || 0);
+          result.completion_tokens = Number(obj.usage.completion_tokens || 0);
+          result.total_tokens = Number(obj.usage.total_tokens || 0);
+        } else if (obj.copilot_usage && Array.isArray(obj.copilot_usage.token_details)) {
+          let input = 0, output = 0;
+          for (const item of obj.copilot_usage.token_details) {
+            if (item.token_type === 'input' || item.token_type === 'cache_read' || item.token_type === 'cache_write') {
+              input += Number(item.token_count || 0);
+            } else if (item.token_type === 'output') {
+              output += Number(item.token_count || 0);
+            }
+          }
+          result.prompt_tokens = input;
+          result.completion_tokens = output;
+          result.total_tokens = input + output;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Resolve the real upstream URL
 // ─────────────────────────────────────────────────────────────────────────────
 function resolveUpstreamUrl(req: FastifyRequest): URL {
@@ -205,6 +284,8 @@ export async function proxyHandler(
     const parsedRequestBody = parseBodyContent(requestBody);
     const parsedResponseBody = parseBodyContent(responseBodyBuf);
 
+    const tokenUsage = extractTokenUsage(responseBodyStr, isStreaming);
+
     const logPayload = {
       timestamp,
       method,
@@ -219,6 +300,9 @@ export async function proxyHandler(
       duration_ms,
       is_streaming:     isStreaming ? 1 : 0,
       error:            errorMessage,
+      prompt_tokens:    tokenUsage.prompt_tokens,
+      completion_tokens: tokenUsage.completion_tokens,
+      total_tokens:     tokenUsage.total_tokens,
     };
 
     try {

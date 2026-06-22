@@ -16,7 +16,15 @@ export interface UseRequestsReturn {
   clearAll: () => Promise<void>;
 }
 
-const DEFAULT_STATS: Stats = { total: 0, streaming: 0, errors: 0, avg_duration_ms: 0 };
+const DEFAULT_STATS: Stats = {
+  total: 0,
+  streaming: 0,
+  errors: 0,
+  avg_duration_ms: 0,
+  total_prompt_tokens: 0,
+  total_completion_tokens: 0,
+  total_tokens: 0,
+};
 const PAGE_SIZE = 50;
 
 export function useRequests(lastEvent: WsEvent | null): UseRequestsReturn {

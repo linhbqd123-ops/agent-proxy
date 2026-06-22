@@ -1,4 +1,4 @@
-import { Activity, Zap, AlertTriangle, Timer } from 'lucide-react';
+import { Activity, Zap, AlertTriangle, Timer, Coins } from 'lucide-react';
 import type { Stats } from '../types';
 
 interface StatBarProps { stats: Stats; }
@@ -22,17 +22,22 @@ function StatCard({ icon, label, value, sub, iconBg, iconColor, valueColor = 'te
           {icon}
         </span>
       </div>
-      <div className="flex items-baseline gap-1.5">
+      <div className="flex items-baseline gap-1.5 flex-wrap">
         <span className={`text-2xl font-bold ${valueColor}`}>{value}</span>
-        {sub && <span className="text-sm text-slate-400">{sub}</span>}
+        {sub && <span className="text-xs text-slate-400 font-medium whitespace-nowrap">{sub}</span>}
       </div>
     </div>
   );
 }
 
 export function StatBar({ stats }: StatBarProps) {
+  const promptPlusCompletion = (stats.total_prompt_tokens || 0) + (stats.total_completion_tokens || 0);
+  const showRatio = promptPlusCompletion > 0;
+  const inputPercent = showRatio ? Math.round((stats.total_prompt_tokens / promptPlusCompletion) * 100) : 0;
+  const outputPercent = showRatio ? Math.round((stats.total_completion_tokens / promptPlusCompletion) * 100) : 0;
+
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
       <StatCard
         icon={<Activity className="w-4 h-4" />}
         label="Total Requests"
@@ -64,6 +69,15 @@ export function StatBar({ stats }: StatBarProps) {
         sub="ms"
         iconBg="bg-emerald-50"
         iconColor="text-emerald-600"
+      />
+      <StatCard
+        icon={<Coins className="w-4 h-4" />}
+        label="Total Tokens"
+        value={(stats.total_tokens || 0).toLocaleString()}
+        sub={showRatio ? `In: ${inputPercent}% · Out: ${outputPercent}%` : ''}
+        iconBg="bg-amber-50"
+        iconColor="text-amber-600"
+        valueColor="text-amber-700"
       />
     </div>
   );

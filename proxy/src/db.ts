@@ -39,7 +39,10 @@ db.exec(`
     response_body    TEXT    NOT NULL DEFAULT '',
     duration_ms      INTEGER NOT NULL DEFAULT 0,
     is_streaming     INTEGER NOT NULL DEFAULT 0,
-    error            TEXT
+    error            TEXT,
+    prompt_tokens    INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens     INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE INDEX IF NOT EXISTS idx_timestamp   ON request_logs(timestamp DESC);
@@ -48,6 +51,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_status      ON request_logs(response_status);
 `);
 
+// ── Run migrations for existing DB ──────────────────────────────────────────
+try { db.exec(`ALTER TABLE request_logs ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
+try { db.exec(`ALTER TABLE request_logs ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
+try { db.exec(`ALTER TABLE request_logs ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Prepared statements
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,10 +63,12 @@ db.exec(`
 const stmtInsert = db.prepare(`
   INSERT INTO request_logs
     (timestamp, method, url, host, path, request_headers, request_body,
-     response_status, response_headers, response_body, duration_ms, is_streaming, error)
+     response_status, response_headers, response_body, duration_ms, is_streaming, error,
+     prompt_tokens, completion_tokens, total_tokens)
   VALUES
     (@timestamp, @method, @url, @host, @path, @request_headers, @request_body,
-     @response_status, @response_headers, @response_body, @duration_ms, @is_streaming, @error)
+     @response_status, @response_headers, @response_body, @duration_ms, @is_streaming, @error,
+     @prompt_tokens, @completion_tokens, @total_tokens)
 `);
 
 const stmtGetById = db.prepare<[number]>(`
@@ -70,7 +80,10 @@ const stmtStats = db.prepare(`
     COUNT(*)                                       AS total,
     SUM(is_streaming)                              AS streaming,
     SUM(CASE WHEN response_status >= 400 OR error IS NOT NULL THEN 1 ELSE 0 END) AS errors,
-    CAST(AVG(duration_ms) AS INTEGER)              AS avg_duration_ms
+    CAST(AVG(duration_ms) AS INTEGER)              AS avg_duration_ms,
+    SUM(prompt_tokens)                             AS total_prompt_tokens,
+    SUM(completion_tokens)                         AS total_completion_tokens,
+    SUM(total_tokens)                              AS total_tokens
   FROM request_logs
 `);
 
@@ -144,12 +157,18 @@ export function getStats(): Stats {
     streaming: number;
     errors: number;
     avg_duration_ms: number;
+    total_prompt_tokens: number;
+    total_completion_tokens: number;
+    total_tokens: number;
   };
   return {
     total:           row.total           ?? 0,
     streaming:       row.streaming       ?? 0,
     errors:          row.errors          ?? 0,
     avg_duration_ms: row.avg_duration_ms ?? 0,
+    total_prompt_tokens: row.total_prompt_tokens ?? 0,
+    total_completion_tokens: row.total_completion_tokens ?? 0,
+    total_tokens:    row.total_tokens    ?? 0,
   };
 }
 

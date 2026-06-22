@@ -17,6 +17,9 @@ export interface RequestLog {
   duration_ms: number;
   is_streaming: number;      // 0 | 1
   error: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
 }
 
 export interface Stats {
@@ -24,6 +27,9 @@ export interface Stats {
   streaming: number;
   errors: number;
   avg_duration_ms: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

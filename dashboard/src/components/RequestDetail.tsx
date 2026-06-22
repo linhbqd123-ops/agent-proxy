@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Copy, Check, Zap, AlertTriangle, Clock, Globe, ArrowUpRight, ExternalLink } from 'lucide-react';
+import { X, Copy, Check, Zap, AlertTriangle, Clock, Globe, ArrowUpRight, ExternalLink, Coins } from 'lucide-react';
 import { format } from 'date-fns';
 import { StreamViewer } from './StreamViewer';
 import type { RequestLog } from '../types';
@@ -7,6 +7,77 @@ import type { RequestLog } from '../types';
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+interface ExtractedUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  input_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  output_tokens?: number;
+}
+
+function parseTokenUsageFromLog(log: RequestLog): ExtractedUsage | null {
+  const result: ExtractedUsage = {
+    prompt_tokens: log.prompt_tokens || 0,
+    completion_tokens: log.completion_tokens || 0,
+    total_tokens: log.total_tokens || 0,
+  };
+
+  let bodyObj: any = null;
+
+  if (typeof log.response_body === 'object' && log.response_body !== null) {
+    bodyObj = log.response_body;
+  } else if (typeof log.response_body === 'string') {
+    if (log.is_streaming === 1) {
+      const lines = log.response_body.split('\n');
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i].trim();
+        if (line.startsWith('data: ')) {
+          const jsonStr = line.slice(6).trim();
+          if (jsonStr === '[DONE]') continue;
+          try {
+            const obj = JSON.parse(jsonStr);
+            if (obj && (obj.usage || obj.copilot_usage)) {
+              bodyObj = obj;
+              break;
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+    } else {
+      try {
+        bodyObj = JSON.parse(log.response_body);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (bodyObj) {
+    if (bodyObj.usage) {
+      result.prompt_tokens = bodyObj.usage.prompt_tokens || result.prompt_tokens;
+      result.completion_tokens = bodyObj.usage.completion_tokens || result.completion_tokens;
+      result.total_tokens = bodyObj.usage.total_tokens || result.total_tokens;
+    }
+    if (bodyObj.copilot_usage && Array.isArray(bodyObj.copilot_usage.token_details)) {
+      for (const item of bodyObj.copilot_usage.token_details) {
+        if (item.token_type === 'input') result.input_tokens = item.token_count;
+        if (item.token_type === 'cache_read') result.cache_read_tokens = item.token_count;
+        if (item.token_type === 'cache_write') result.cache_write_tokens = item.token_count;
+        if (item.token_type === 'output') result.output_tokens = item.token_count;
+      }
+    }
+  }
+
+  if (result.total_tokens > 0 || result.prompt_tokens > 0 || result.completion_tokens > 0) {
+    return result;
+  }
+  return null;
+}
 
 function bodyToString(body: string | object | null | undefined): string {
   if (!body) return '';
@@ -94,6 +165,8 @@ export function RequestDetail({ log, onClose }: RequestDetailProps) {
     : log.response_status >= 200            ? 'text-emerald-600'
     :                                         'text-slate-400';
 
+  const usage = parseTokenUsageFromLog(log);
+
   return (
     <div className="flex flex-col h-full bg-white animate-slide-in">
 
@@ -150,6 +223,103 @@ export function RequestDetail({ log, onClose }: RequestDetailProps) {
           Full URL <ExternalLink className="w-3 h-3" />
         </a>
       </div>
+
+      {/* ── Token Usage Visualizer ────────────────────────────────────────── */}
+      {usage && (
+        <div className="px-5 py-3.5 border-b border-slate-200 bg-slate-50/50">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5 text-slate-700 font-semibold text-xs uppercase tracking-wider">
+              <Coins className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
+              Token Usage
+            </div>
+            <div className="text-xs text-slate-500 font-mono">
+              Total: <strong className="text-slate-800 font-bold">{usage.total_tokens.toLocaleString()}</strong> tokens
+            </div>
+          </div>
+
+          {/* Breakdown progress bar */}
+          <div className="flex h-2 w-full rounded-full overflow-hidden bg-slate-100 mb-3">
+            {usage.input_tokens !== undefined || usage.cache_read_tokens !== undefined || usage.cache_write_tokens !== undefined ? (
+              <>
+                {/* Input tokens */}
+                <div
+                  style={{ width: `${((usage.input_tokens || 0) / usage.total_tokens) * 100}%` }}
+                  className="bg-brand-500 transition-all duration-300"
+                  title={`Input: ${usage.input_tokens}`}
+                />
+                {/* Cache read (hit) */}
+                <div
+                  style={{ width: `${((usage.cache_read_tokens || 0) / usage.total_tokens) * 100}%` }}
+                  className="bg-emerald-500 transition-all duration-300"
+                  title={`Cache Read (Hit): ${usage.cache_read_tokens}`}
+                />
+                {/* Cache write (saved) */}
+                <div
+                  style={{ width: `${((usage.cache_write_tokens || 0) / usage.total_tokens) * 100}%` }}
+                  className="bg-blue-400 transition-all duration-300"
+                  title={`Cache Write: ${usage.cache_write_tokens}`}
+                />
+                {/* Output tokens */}
+                <div
+                  style={{ width: `${((usage.output_tokens || 0) / usage.total_tokens) * 100}%` }}
+                  className="bg-violet-500 transition-all duration-300"
+                  title={`Output: ${usage.output_tokens}`}
+                />
+              </>
+            ) : (
+              <>
+                {/* Prompt tokens */}
+                <div
+                  style={{ width: `${(usage.prompt_tokens / usage.total_tokens) * 100}%` }}
+                  className="bg-brand-500 transition-all duration-300"
+                  title={`Prompt: ${usage.prompt_tokens}`}
+                />
+                {/* Completion tokens */}
+                <div
+                  style={{ width: `${(usage.completion_tokens / usage.total_tokens) * 100}%` }}
+                  className="bg-violet-500 transition-all duration-300"
+                  title={`Completion: ${usage.completion_tokens}`}
+                />
+              </>
+            )}
+          </div>
+
+          {/* Detailed numbers grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
+            {usage.input_tokens !== undefined || usage.cache_read_tokens !== undefined || usage.cache_write_tokens !== undefined ? (
+              <>
+                <div className="flex items-center justify-between p-1.5 rounded bg-white border border-slate-200">
+                  <span className="text-slate-400">Input</span>
+                  <strong className="text-slate-700">{(usage.input_tokens || 0).toLocaleString()}</strong>
+                </div>
+                <div className="flex items-center justify-between p-1.5 rounded bg-emerald-50/50 border border-emerald-100/50">
+                  <span className="text-emerald-600 font-medium">Cache Hit</span>
+                  <strong className="text-emerald-700">{(usage.cache_read_tokens || 0).toLocaleString()}</strong>
+                </div>
+                <div className="flex items-center justify-between p-1.5 rounded bg-blue-50/50 border border-blue-100/50">
+                  <span className="text-blue-600 font-medium">Cache Save</span>
+                  <strong className="text-blue-700">{(usage.cache_write_tokens || 0).toLocaleString()}</strong>
+                </div>
+                <div className="flex items-center justify-between p-1.5 rounded bg-violet-50/50 border border-violet-100/50">
+                  <span className="text-violet-600 font-medium">Output</span>
+                  <strong className="text-violet-700">{(usage.output_tokens || 0).toLocaleString()}</strong>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between p-1.5 rounded bg-white border border-slate-200 col-span-2">
+                  <span className="text-slate-400">Prompt (Input)</span>
+                  <strong className="text-slate-700">{usage.prompt_tokens.toLocaleString()}</strong>
+                </div>
+                <div className="flex items-center justify-between p-1.5 rounded bg-violet-50/50 border border-violet-100/50 col-span-2">
+                  <span className="text-violet-600 font-medium">Completion (Output)</span>
+                  <strong className="text-violet-700">{usage.completion_tokens.toLocaleString()}</strong>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Tabs ──────────────────────────────────────────────────────────── */}
       <div className="flex border-b border-slate-200 px-5 bg-white">
