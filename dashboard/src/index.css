@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+
+  body {
+    @apply bg-slate-50 text-slate-800 font-sans antialiased;
+    min-height: 100vh;
+  }
+
+  ::-webkit-scrollbar        { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track  { @apply bg-slate-100; }
+  ::-webkit-scrollbar-thumb  { @apply bg-slate-300 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-brand-400; }
+}
+
+@layer components {
+  /* ── Badges ── */
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold;
+  }
+  .badge-green { @apply badge bg-emerald-50  text-emerald-700 ring-1 ring-emerald-200; }
+  .badge-amber { @apply badge bg-amber-50   text-amber-700   ring-1 ring-amber-200;  }
+  .badge-red   { @apply badge bg-red-50     text-red-700     ring-1 ring-red-200;    }
+  .badge-blue  { @apply badge bg-brand-50   text-brand-700   ring-1 ring-brand-200;  }
+  .badge-gray  { @apply badge bg-slate-100  text-slate-600   ring-1 ring-slate-200;  }
+  .badge-violet{ @apply badge bg-violet-50  text-violet-700  ring-1 ring-violet-200; }
+
+  /* ── Cards / surfaces ── */
+  .card {
+    @apply bg-white rounded-xl border border-slate-200 shadow-card;
+  }
+  .card-inset {
+    @apply bg-slate-50 rounded-lg border border-slate-200;
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    @apply inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium
+           transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-brand-400/40;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 hover:bg-brand-700 text-white shadow-sm;
+  }
+  .btn-ghost {
+    @apply btn text-slate-500 hover:text-slate-800 hover:bg-slate-100;
+  }
+  .btn-danger {
+    @apply btn text-red-600 hover:text-red-700 hover:bg-red-50
+           ring-1 ring-red-200;
+  }
+
+  /* ── Inputs ── */
+  .input {
+    @apply bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-sm
+           text-slate-800 placeholder-slate-400
+           focus:outline-none focus:ring-2 focus:ring-brand-400/40
+           focus:border-brand-400 transition-all duration-150 shadow-sm;
+  }
+
+  /* ── Stat cards ── */
+  .stat-card {
+    @apply card p-4 flex flex-col gap-1;
+  }
+
+  /* ── Table row hover ── */
+  .tr-hover {
+    @apply hover:bg-brand-50/60 transition-colors duration-75 cursor-pointer;
+  }
+}

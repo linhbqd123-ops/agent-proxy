@@ -1,0 +1,17 @@
+{
+  "name": "copilot-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "proxy",
+    "dashboard"
+  ],
+  "scripts": {
+    "dev": "concurrently -n proxy,dashboard -c cyan,magenta \"npm run dev -w proxy\" \"npm run dev -w dashboard\"",
+    "build": "npm run build -w proxy && npm run build -w dashboard",
+    "typecheck": "npm run typecheck -w proxy && npm run typecheck -w dashboard"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
