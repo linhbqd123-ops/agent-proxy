@@ -13,6 +13,7 @@ import {
   logPrettyJson,
   logPrettyBody,
 } from './logger.js';
+//
 
 // ─────────────────────────────────────────────────────────────────────────────
 // When Copilot uses debug.overrideProxyUrl it replaces the API base URL,
@@ -38,7 +39,7 @@ const HOP_BY_HOP = new Set([
 // ─────────────────────────────────────────────────────────────────────────────
 function parseBodyContent(body: Buffer | null | string): string | object | null {
   if (!body) return null;
-  
+
   const bodyStr = typeof body === 'string' ? body : body.toString('utf-8');
   if (!bodyStr || bodyStr.length === 0) return null;
 
@@ -47,6 +48,7 @@ function parseBodyContent(body: Buffer | null | string): string | object | null 
   } catch {
     return bodyStr;
   }
+
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -145,12 +147,29 @@ function resolveUpstreamUrl(req: FastifyRequest): URL {
   // Host header will be "localhost:4000" (the proxy itself), so we replace
   // it with the real upstream host.
   const hostHeader = (req.headers['host'] as string | undefined) ?? '';
-  const isLocal    = LOCALHOST_RE.test(hostHeader);
-  let upstream     = isLocal ? UPSTREAM_HOST : hostHeader.replace(/:\d+$/, '');
+  const isLocal = LOCALHOST_RE.test(hostHeader);
+  let upstream = isLocal ? UPSTREAM_HOST : hostHeader.replace(/:\d+$/, '');
 
-  // Route completions to the dedicated copilot-proxy endpoint
-  if (isLocal && rawUrl.startsWith('/completions')) {
-    upstream = 'copilot-proxy.githubusercontent.com';
+  // ── Routing logic based on copilot-integration-id ─────────────────────────
+  // The presence/absence of this header tells us which upstream to use.
+  const copilotIntegrationId = (() => {
+    const raw = req.headers['copilot-integration-id'];
+    if (!raw) return null;
+    return Array.isArray(raw) ? raw[0] : raw;
+  })();
+
+  if (!copilotIntegrationId) {
+    // No copilot-integration-id → implicit Code Completion request.
+    // Must go through proxy.individual.githubcopilot.com to avoid
+    // "model_not_supported" errors.
+    upstream = 'proxy.individual.githubcopilot.com';
+  } else if (
+    copilotIntegrationId === 'vscode-chat' &&
+    /^\/chat\/completions/.test(rawUrl)
+  ) {
+    // Chat request with explicit vscode-chat integration ID.
+    // Route to the standard Copilot API endpoint.
+    upstream = 'api.githubcopilot.com';
   }
 
   return new URL(`https://${upstream}${rawUrl}`);
@@ -175,7 +194,6 @@ function buildUpstreamHeaders(req: FastifyRequest, targetUrl: URL): Record<strin
   // Ensure IDE identity headers for Copilot auth are present
   const hasEditorVersion = Object.keys(headers).some(k => k.toLowerCase() === 'editor-version');
   const hasPluginVersion = Object.keys(headers).some(k => k.toLowerCase() === 'editor-plugin-version');
-  const hasIntegrationId = Object.keys(headers).some(k => k.toLowerCase() === 'copilot-integration-id');
 
   if (!hasEditorVersion) {
     headers['Editor-Version'] = 'vscode/1.90.0';
@@ -183,9 +201,10 @@ function buildUpstreamHeaders(req: FastifyRequest, targetUrl: URL): Record<strin
   if (!hasPluginVersion) {
     headers['Editor-Plugin-Version'] = 'copilot-chat/0.53.0';
   }
-  if (!hasIntegrationId) {
-    headers['Copilot-Integration-Id'] = 'vscode-chat';
-  }
+
+  // NOTE: Do NOT auto-add Copilot-Integration-Id.
+  // Its absence is the routing signal for Code Completion requests
+  // (see resolveUpstreamUrl). Injecting it here would break that logic.
 
   return headers;
 }
@@ -197,7 +216,7 @@ export async function proxyHandler(
   req: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  const startMs   = Date.now();
+  const startMs = Date.now();
   const timestamp = startMs;
 
   // ── Resolve target ─────────────────────────────────────────────────────────
@@ -234,10 +253,10 @@ export async function proxyHandler(
   } else {
     delete requestHeaders['content-length'];
   }
-  const method  = req.method.toUpperCase();
-  const host    = targetUrl.host;
-  const path    = targetUrl.pathname + targetUrl.search;
-  const urlStr  = targetUrl.toString();
+  const method = req.method.toUpperCase();
+  const host = targetUrl.host;
+  const path = targetUrl.pathname + targetUrl.search;
+  const urlStr = targetUrl.toString();
 
   // ── Log full incoming request details ────────────────────────────────────
   logIncomingRequest(method, urlStr, req.headers as any, requestBody ? requestBody.length : null);
@@ -250,14 +269,16 @@ export async function proxyHandler(
   }
 
   // ── Shared state written by the two code paths below ──────────────────────
-  let responseStatus      = 0;
+  let responseStatus = 0;
   let responseHeadersRaw: Record<string, string> = {};
-  let responseBodyBuf     = Buffer.alloc(0);
-  let isStreaming          = false;
+  let responseBodyBuf = Buffer.alloc(0);
+  let isStreaming = false;
   let errorMessage: string | null = null;
-  let finishCalled        = false;  // guard: finish() must only run once
+  let finishCalled = false;  // guard: finish() must only run once
 
   // ── Helper: persist + broadcast after the response is fully sent ───────────
+  // NOTE: All heavy work (DB insert, broadcast) is deferred via setImmediate()
+  // so it never blocks the response stream pipeline.
   function finish(reason: string = 'end') {
     if (finishCalled) {
       log('debug', 'proxy', `finish() called again (reason=${reason}) — skipping`);
@@ -265,62 +286,71 @@ export async function proxyHandler(
     }
     finishCalled = true;
 
-    const duration_ms  = Date.now() - startMs;
-    const responseBody = responseBodyBuf.toString('utf-8');
+    // Snapshot values before deferring — these won't change after this point.
+    const _duration_ms = Date.now() - startMs;
+    const _responseBodyBuf = responseBodyBuf;
+    const _responseStatus = responseStatus;
+    const _responseHeadersRaw = { ...responseHeadersRaw };
+    const _isStreaming = isStreaming;
+    const _errorMessage = errorMessage;
 
-    // Log response capture summary
-    logUpstreamResponse(method, path, responseStatus, responseHeadersRaw['content-type'] ?? '', isStreaming, duration_ms);
-    logPrettyJson('RESPONSE HEADERS', responseHeadersRaw);
-    logBodyCapture('response', responseBodyBuf.length, responseBodyBuf.length === MAX_BODY_LOG_BYTES);
-    logPrettyBody('RESPONSE BODY', responseBodyBuf);
-    if (errorMessage) {
-      log('warn', 'proxy', `  error: ${errorMessage}`);
-    }
+    setImmediate(() => {
+      const responseBody = _responseBodyBuf.toString('utf-8');
 
-    const requestBodyStr = requestBody ? requestBody.toString('utf-8') : null;
-    const responseBodyStr = responseBodyBuf.toString('utf-8');
+      // Log response capture summary
+      logUpstreamResponse(method, path, _responseStatus, _responseHeadersRaw['content-type'] ?? '', _isStreaming, _duration_ms);
+      logPrettyJson('RESPONSE HEADERS', _responseHeadersRaw);
+      logBodyCapture('response', _responseBodyBuf.length, _responseBodyBuf.length === MAX_BODY_LOG_BYTES);
+      logPrettyBody('RESPONSE BODY', _responseBodyBuf);
+      if (_errorMessage) {
+        log('warn', 'proxy', `  error: ${_errorMessage}`);
+      }
 
-    // Parse bodies for better display in dashboard
-    const parsedRequestBody = parseBodyContent(requestBody);
-    const parsedResponseBody = parseBodyContent(responseBodyBuf);
+      const requestBodyStr = requestBody ? requestBody.toString('utf-8') : null;
+      const responseBodyStr = _responseBodyBuf.toString('utf-8');
 
-    const tokenUsage = extractTokenUsage(responseBodyStr, isStreaming);
+      // Parse bodies for better display in dashboard
+      const parsedRequestBody = parseBodyContent(requestBody);
+      const parsedResponseBody = parseBodyContent(_responseBodyBuf);
 
-    const logPayload = {
-      timestamp,
-      method,
-      url:              urlStr,
-      host,
-      path,
-      request_headers:  JSON.stringify(req.headers),
-      request_body:     requestBodyStr,
-      response_status:  responseStatus,
-      response_headers: JSON.stringify(responseHeadersRaw),
-      response_body:    responseBodyStr,
-      duration_ms,
-      is_streaming:     isStreaming ? 1 : 0,
-      error:            errorMessage,
-      prompt_tokens:    tokenUsage.prompt_tokens,
-      completion_tokens: tokenUsage.completion_tokens,
-      total_tokens:     tokenUsage.total_tokens,
-    };
+      const tokenUsage = extractTokenUsage(responseBodyStr, _isStreaming);
 
-    try {
-      const id = insertLog(logPayload);
-      logFinish(id, !errorMessage, `reason=${reason}`);
-      broadcast({
-        type: 'request_complete',
-        log: {
-          ...logPayload,
-          id,
-          request_body: parsedRequestBody,
-          response_body: parsedResponseBody,
-        } as any,
-      });
-      broadcast({ type: 'stats_update', stats: getStats() });
-    } catch (dbErr) {
-      logError('db', 'Failed to insert log', dbErr);
-    }
+      const logPayload = {
+        timestamp,
+        method,
+        url: urlStr,
+        host,
+        path,
+        request_headers: JSON.stringify(req.headers),
+        request_body: requestBodyStr,
+        response_status: _responseStatus,
+        response_headers: JSON.stringify(_responseHeadersRaw),
+        response_body: responseBodyStr,
+        duration_ms: _duration_ms,
+        is_streaming: _isStreaming ? 1 : 0,
+        error: _errorMessage,
+        prompt_tokens: tokenUsage.prompt_tokens,
+        completion_tokens: tokenUsage.completion_tokens,
+        total_tokens: tokenUsage.total_tokens,
+      };
+
+      try {
+        const id = insertLog(logPayload);
+        logFinish(id, !_errorMessage, `reason=${reason}`);
+        broadcast({
+          type: 'request_complete',
+          log: {
+            ...logPayload,
+            id,
+            request_body: parsedRequestBody,
+            response_body: parsedResponseBody,
+          } as any,
+        });
+        broadcast({ type: 'stats_update', stats: getStats() });
+      } catch (dbErr) {
+        logError('db', 'Failed to insert log', dbErr);
+      }
+    });
   }
 
   // ── Forward to upstream ────────────────────────────────────────────────────
@@ -336,11 +366,11 @@ export async function proxyHandler(
     );
 
     const upstreamRes = await undiciRequest(urlStr, {
-      method:          method as NonNullable<Parameters<typeof undiciRequest>[1]>['method'],
-      headers:         requestHeaders,
-      body:            requestBody ?? undefined,
-      headersTimeout:  30_000,
-      bodyTimeout:     0,       // no timeout on streaming bodies
+      method: method as NonNullable<Parameters<typeof undiciRequest>[1]>['method'],
+      headers: requestHeaders,
+      body: requestBody ?? undefined,
+      headersTimeout: 30_000,
+      bodyTimeout: 0,       // no timeout on streaming bodies
       maxRedirections: 5,
     });
 
@@ -363,14 +393,14 @@ export async function proxyHandler(
     for (const [key, value] of Object.entries(responseHeadersRaw)) {
       // Skip headers Fastify / Node manage itself
       if (key === 'transfer-encoding') continue;
-      if (key === 'content-length'   ) continue; // let Node recompute
+      if (key === 'content-length') continue; // let Node recompute
       try { reply.header(key, value); } catch { /* ignore invalid headers */ }
     }
 
     // ── Tee the body: one copy → client, one copy → DB log ─────────────────
     const chunks: Buffer[] = [];
-    let   totalBytes = 0;
-    const pass   = new PassThrough();
+    let totalBytes = 0;
+    const pass = new PassThrough();
 
     // Consume the undici body async, push into PassThrough
     const drainPromise = (async () => {
@@ -424,8 +454,11 @@ export async function proxyHandler(
     // and preserves keep-alive for subsequent requests on the same connection.
     await reply.send(pass);
 
-    // Await drain so any async errors surface before the handler returns
-    await drainPromise;
+    // Fire-and-forget: drain the upstream body in the background.
+    // Errors are already caught inside drainPromise and surfaced via
+    // errorMessage / pass.destroy().  Not awaiting ensures the proxy
+    // handler returns immediately — zero added latency for the client.
+    drainPromise.catch(() => { });
 
   } catch (err: any) {
     // Upstream connection error (ECONNREFUSED, DNS, etc.)
