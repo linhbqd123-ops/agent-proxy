@@ -20,6 +20,10 @@ export interface RequestLog {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  is_code_completion: number; // 0 = chat (api.githubcopilot.com), 1 = code completion (proxy.individual.githubcopilot.com)
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,6 +64,15 @@ export interface Stats {
   total_prompt_tokens: number;
   total_completion_tokens: number;
   total_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_write_tokens: number;
+  total_reasoning_tokens: number;
+  total_normal_tokens: number;       // tokens from api.githubcopilot.com (chat)
+  total_normal_prompt_tokens: number;
+  total_normal_completion_tokens: number;
+  total_code_completion_tokens: number; // tokens from proxy.individual.githubcopilot.com
+  total_cc_prompt_tokens: number;
+  total_cc_completion_tokens: number;
 }
 
 export type WsEvent = WsRequestStarted | WsRequestComplete | WsStatsUpdate;

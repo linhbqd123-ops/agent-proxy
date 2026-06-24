@@ -24,6 +24,15 @@ const DEFAULT_STATS: Stats = {
   total_prompt_tokens: 0,
   total_completion_tokens: 0,
   total_tokens: 0,
+  total_cache_read_tokens: 0,
+  total_cache_write_tokens: 0,
+  total_reasoning_tokens: 0,
+  total_normal_tokens: 0,
+  total_normal_prompt_tokens: 0,
+  total_normal_completion_tokens: 0,
+  total_code_completion_tokens: 0,
+  total_cc_prompt_tokens: 0,
+  total_cc_completion_tokens: 0,
 };
 const PAGE_SIZE = 50;
 

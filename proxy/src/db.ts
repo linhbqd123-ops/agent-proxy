@@ -42,7 +42,11 @@ db.exec(`
     error            TEXT,
     prompt_tokens    INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
-    total_tokens     INTEGER NOT NULL DEFAULT 0
+    total_tokens     INTEGER NOT NULL DEFAULT 0,
+    is_code_completion INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+    reasoning_tokens    INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE INDEX IF NOT EXISTS idx_timestamp   ON request_logs(timestamp DESC);
@@ -55,6 +59,10 @@ db.exec(`
 try { db.exec(`ALTER TABLE request_logs ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
 try { db.exec(`ALTER TABLE request_logs ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
 try { db.exec(`ALTER TABLE request_logs ADD COLUMN total_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
+try { db.exec(`ALTER TABLE request_logs ADD COLUMN is_code_completion INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
+try { db.exec(`ALTER TABLE request_logs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
+try { db.exec(`ALTER TABLE request_logs ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
+try { db.exec(`ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Prepared statements
@@ -64,11 +72,13 @@ const stmtInsert = db.prepare(`
   INSERT INTO request_logs
     (timestamp, method, url, host, path, request_headers, request_body,
      response_status, response_headers, response_body, duration_ms, is_streaming, error,
-     prompt_tokens, completion_tokens, total_tokens)
+     prompt_tokens, completion_tokens, total_tokens,
+     is_code_completion, cache_read_tokens, cache_write_tokens, reasoning_tokens)
   VALUES
     (@timestamp, @method, @url, @host, @path, @request_headers, @request_body,
      @response_status, @response_headers, @response_body, @duration_ms, @is_streaming, @error,
-     @prompt_tokens, @completion_tokens, @total_tokens)
+     @prompt_tokens, @completion_tokens, @total_tokens,
+     @is_code_completion, @cache_read_tokens, @cache_write_tokens, @reasoning_tokens)
 `);
 
 const stmtGetById = db.prepare<[number]>(`
@@ -83,7 +93,16 @@ const stmtStats = db.prepare(`
     CAST(AVG(duration_ms) AS INTEGER)              AS avg_duration_ms,
     SUM(prompt_tokens)                             AS total_prompt_tokens,
     SUM(completion_tokens)                         AS total_completion_tokens,
-    SUM(total_tokens)                              AS total_tokens
+    SUM(total_tokens)                              AS total_tokens,
+    SUM(cache_read_tokens)                         AS total_cache_read_tokens,
+    SUM(cache_write_tokens)                        AS total_cache_write_tokens,
+    SUM(reasoning_tokens)                          AS total_reasoning_tokens,
+    SUM(CASE WHEN is_code_completion = 0 THEN total_tokens ELSE 0 END) AS total_normal_tokens,
+    SUM(CASE WHEN is_code_completion = 0 THEN prompt_tokens ELSE 0 END) AS total_normal_prompt_tokens,
+    SUM(CASE WHEN is_code_completion = 0 THEN completion_tokens ELSE 0 END) AS total_normal_completion_tokens,
+    SUM(CASE WHEN is_code_completion = 1 THEN total_tokens ELSE 0 END) AS total_code_completion_tokens,
+    SUM(CASE WHEN is_code_completion = 1 THEN prompt_tokens ELSE 0 END) AS total_cc_prompt_tokens,
+    SUM(CASE WHEN is_code_completion = 1 THEN completion_tokens ELSE 0 END) AS total_cc_completion_tokens
   FROM request_logs
 `);
 
@@ -160,6 +179,15 @@ export function getStats(): Stats {
     total_prompt_tokens: number;
     total_completion_tokens: number;
     total_tokens: number;
+    total_cache_read_tokens: number;
+    total_cache_write_tokens: number;
+    total_reasoning_tokens: number;
+    total_normal_tokens: number;
+    total_normal_prompt_tokens: number;
+    total_normal_completion_tokens: number;
+    total_code_completion_tokens: number;
+    total_cc_prompt_tokens: number;
+    total_cc_completion_tokens: number;
   };
   return {
     total:           row.total           ?? 0,
@@ -169,6 +197,15 @@ export function getStats(): Stats {
     total_prompt_tokens: row.total_prompt_tokens ?? 0,
     total_completion_tokens: row.total_completion_tokens ?? 0,
     total_tokens:    row.total_tokens    ?? 0,
+    total_cache_read_tokens: row.total_cache_read_tokens ?? 0,
+    total_cache_write_tokens: row.total_cache_write_tokens ?? 0,
+    total_reasoning_tokens: row.total_reasoning_tokens ?? 0,
+    total_normal_tokens: row.total_normal_tokens ?? 0,
+    total_normal_prompt_tokens: row.total_normal_prompt_tokens ?? 0,
+    total_normal_completion_tokens: row.total_normal_completion_tokens ?? 0,
+    total_code_completion_tokens: row.total_code_completion_tokens ?? 0,
+    total_cc_prompt_tokens: row.total_cc_prompt_tokens ?? 0,
+    total_cc_completion_tokens: row.total_cc_completion_tokens ?? 0,
   };
 }
 

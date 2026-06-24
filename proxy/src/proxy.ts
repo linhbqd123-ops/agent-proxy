@@ -58,16 +58,51 @@ interface TokenUsage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
 }
 
 function extractTokenUsage(responseBody: string, isStreaming: boolean): TokenUsage {
-  const result = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  const result = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0 };
   if (!responseBody) return result;
+
+  function parseTokenDetails(obj: any): void {
+    if (obj.copilot_usage && Array.isArray(obj.copilot_usage.token_details)) {
+      let input = 0, output = 0;
+      for (const item of obj.copilot_usage.token_details) {
+        const count = Number(item.token_count || 0);
+        if (item.token_type === 'input') {
+          input += count;
+        } else if (item.token_type === 'cache_read') {
+          input += count;
+          result.cache_read_tokens += count;
+        } else if (item.token_type === 'cache_write') {
+          input += count;
+          result.cache_write_tokens += count;
+        } else if (item.token_type === 'output') {
+          output += count;
+        } else if (item.token_type === 'reasoning' || item.token_type === 'thinking') {
+          result.reasoning_tokens += count;
+          output += count;
+        }
+      }
+      result.prompt_tokens = input;
+      result.completion_tokens = output;
+      result.total_tokens = input + output;
+    } else if (obj.usage?.prompt_tokens != null) {
+      result.prompt_tokens = Number(obj.usage.prompt_tokens);
+      result.completion_tokens = Number(obj.usage.completion_tokens || 0);
+      result.total_tokens = Number(obj.usage.total_tokens || 0);
+    } else if (obj.usage?.input_tokens != null) {
+      result.prompt_tokens = Number(obj.usage.input_tokens);
+      result.completion_tokens = Number(obj.usage.output_tokens || 0);
+      result.total_tokens = result.prompt_tokens + result.completion_tokens;
+    }
+  }
 
   if (isStreaming) {
     const lines = responseBody.split('\n');
-    // Read reverse or forward. SSE streaming usage is in one of the final data lines.
-    // Loop backwards for faster lookup of final usage.
     for (let i = lines.length - 1; i >= 0; i--) {
       const line = lines[i].trim();
       if (line.startsWith('data: ')) {
@@ -75,26 +110,9 @@ function extractTokenUsage(responseBody: string, isStreaming: boolean): TokenUsa
         if (jsonStr === '[DONE]') continue;
         try {
           const obj = JSON.parse(jsonStr);
-          if (obj) {
-            if (obj.usage) {
-              result.prompt_tokens = Number(obj.usage.prompt_tokens || 0);
-              result.completion_tokens = Number(obj.usage.completion_tokens || 0);
-              result.total_tokens = Number(obj.usage.total_tokens || 0);
-              break; // found the usage details block
-            } else if (obj.copilot_usage && Array.isArray(obj.copilot_usage.token_details)) {
-              let input = 0, output = 0;
-              for (const item of obj.copilot_usage.token_details) {
-                if (item.token_type === 'input' || item.token_type === 'cache_read' || item.token_type === 'cache_write') {
-                  input += Number(item.token_count || 0);
-                } else if (item.token_type === 'output') {
-                  output += Number(item.token_count || 0);
-                }
-              }
-              result.prompt_tokens = input;
-              result.completion_tokens = output;
-              result.total_tokens = input + output;
-              break; // found the usage details block
-            }
+          if (obj && (obj.usage || obj.copilot_usage)) {
+            parseTokenDetails(obj);
+            break;
           }
         } catch {
           // ignore parsing error for individual lines
@@ -104,24 +122,8 @@ function extractTokenUsage(responseBody: string, isStreaming: boolean): TokenUsa
   } else {
     try {
       const obj = JSON.parse(responseBody);
-      if (obj) {
-        if (obj.usage) {
-          result.prompt_tokens = Number(obj.usage.prompt_tokens || 0);
-          result.completion_tokens = Number(obj.usage.completion_tokens || 0);
-          result.total_tokens = Number(obj.usage.total_tokens || 0);
-        } else if (obj.copilot_usage && Array.isArray(obj.copilot_usage.token_details)) {
-          let input = 0, output = 0;
-          for (const item of obj.copilot_usage.token_details) {
-            if (item.token_type === 'input' || item.token_type === 'cache_read' || item.token_type === 'cache_write') {
-              input += Number(item.token_count || 0);
-            } else if (item.token_type === 'output') {
-              output += Number(item.token_count || 0);
-            }
-          }
-          result.prompt_tokens = input;
-          result.completion_tokens = output;
-          result.total_tokens = input + output;
-        }
+      if (obj && (obj.usage || obj.copilot_usage)) {
+        parseTokenDetails(obj);
       }
     } catch {
       // ignore
@@ -158,15 +160,12 @@ function resolveUpstreamUrl(req: FastifyRequest): URL {
     return Array.isArray(raw) ? raw[0] : raw;
   })();
 
-  if (!copilotIntegrationId) {
+  if (!copilotIntegrationId &&
+    /\/completions(?:\?|$)/.test(rawUrl)) {
     // No copilot-integration-id → implicit Code Completion request.
-    // Must go through proxy.individual.githubcopilot.com to avoid
-    // "model_not_supported" errors.
+    // Must go through proxy.individual.githubcopilot.com
     upstream = 'proxy.individual.githubcopilot.com';
-  } else if (
-    copilotIntegrationId === 'vscode-chat' &&
-    /^\/chat\/completions/.test(rawUrl)
-  ) {
+  } else {
     // Chat request with explicit vscode-chat integration ID.
     // Route to the standard Copilot API endpoint.
     upstream = 'api.githubcopilot.com';
@@ -314,6 +313,7 @@ export async function proxyHandler(
       const parsedResponseBody = parseBodyContent(_responseBodyBuf);
 
       const tokenUsage = extractTokenUsage(responseBodyStr, _isStreaming);
+      const isCodeCompletion = host === 'proxy.individual.githubcopilot.com' ? 1 : 0;
 
       const logPayload = {
         timestamp,
@@ -332,6 +332,10 @@ export async function proxyHandler(
         prompt_tokens: tokenUsage.prompt_tokens,
         completion_tokens: tokenUsage.completion_tokens,
         total_tokens: tokenUsage.total_tokens,
+        is_code_completion: isCodeCompletion,
+        cache_read_tokens: tokenUsage.cache_read_tokens,
+        cache_write_tokens: tokenUsage.cache_write_tokens,
+        reasoning_tokens: tokenUsage.reasoning_tokens,
       };
 
       try {

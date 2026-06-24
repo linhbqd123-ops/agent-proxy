@@ -16,6 +16,7 @@ interface ExtractedUsage {
   cache_read_tokens?: number;
   cache_write_tokens?: number;
   output_tokens?: number;
+  reasoning_tokens?: number;
 }
 
 function parseTokenUsageFromLog(log: RequestLog): ExtractedUsage | null {
@@ -69,6 +70,7 @@ function parseTokenUsageFromLog(log: RequestLog): ExtractedUsage | null {
         if (item.token_type === 'cache_read') result.cache_read_tokens = item.token_count;
         if (item.token_type === 'cache_write') result.cache_write_tokens = item.token_count;
         if (item.token_type === 'output') result.output_tokens = item.token_count;
+        if (item.token_type === 'reasoning' || item.token_type === 'thinking') result.reasoning_tokens = item.token_count;
       }
     }
   }
@@ -241,25 +243,26 @@ export function RequestDetail({ log, onClose }: RequestDetailProps) {
           <div className="flex h-2 w-full rounded-full overflow-hidden bg-slate-100 mb-3">
             {usage.input_tokens !== undefined || usage.cache_read_tokens !== undefined || usage.cache_write_tokens !== undefined ? (
               <>
-                {/* Input tokens */}
                 <div
                   style={{ width: `${((usage.input_tokens || 0) / usage.total_tokens) * 100}%` }}
                   className="bg-brand-500 transition-all duration-300"
                   title={`Input: ${usage.input_tokens}`}
                 />
-                {/* Cache read (hit) */}
                 <div
                   style={{ width: `${((usage.cache_read_tokens || 0) / usage.total_tokens) * 100}%` }}
                   className="bg-emerald-500 transition-all duration-300"
                   title={`Cache Read (Hit): ${usage.cache_read_tokens}`}
                 />
-                {/* Cache write (saved) */}
                 <div
                   style={{ width: `${((usage.cache_write_tokens || 0) / usage.total_tokens) * 100}%` }}
                   className="bg-blue-400 transition-all duration-300"
                   title={`Cache Write: ${usage.cache_write_tokens}`}
                 />
-                {/* Output tokens */}
+                <div
+                  style={{ width: `${((usage.reasoning_tokens || 0) / usage.total_tokens) * 100}%` }}
+                  className="bg-purple-500 transition-all duration-300"
+                  title={`Reasoning: ${usage.reasoning_tokens}`}
+                />
                 <div
                   style={{ width: `${((usage.output_tokens || 0) / usage.total_tokens) * 100}%` }}
                   className="bg-violet-500 transition-all duration-300"
@@ -268,13 +271,11 @@ export function RequestDetail({ log, onClose }: RequestDetailProps) {
               </>
             ) : (
               <>
-                {/* Prompt tokens */}
                 <div
                   style={{ width: `${(usage.prompt_tokens / usage.total_tokens) * 100}%` }}
                   className="bg-brand-500 transition-all duration-300"
                   title={`Prompt: ${usage.prompt_tokens}`}
                 />
-                {/* Completion tokens */}
                 <div
                   style={{ width: `${(usage.completion_tokens / usage.total_tokens) * 100}%` }}
                   className="bg-violet-500 transition-all duration-300"
@@ -285,7 +286,7 @@ export function RequestDetail({ log, onClose }: RequestDetailProps) {
           </div>
 
           {/* Detailed numbers grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px] font-mono">
             {usage.input_tokens !== undefined || usage.cache_read_tokens !== undefined || usage.cache_write_tokens !== undefined ? (
               <>
                 <div className="flex items-center justify-between p-1.5 rounded bg-white border border-slate-200">
@@ -299,6 +300,10 @@ export function RequestDetail({ log, onClose }: RequestDetailProps) {
                 <div className="flex items-center justify-between p-1.5 rounded bg-blue-50/50 border border-blue-100/50">
                   <span className="text-blue-600 font-medium">Cache Save</span>
                   <strong className="text-blue-700">{(usage.cache_write_tokens || 0).toLocaleString()}</strong>
+                </div>
+                <div className="flex items-center justify-between p-1.5 rounded bg-purple-50/50 border border-purple-100/50">
+                  <span className="text-purple-600 font-medium">Reasoning</span>
+                  <strong className="text-purple-700">{(usage.reasoning_tokens || 0).toLocaleString()}</strong>
                 </div>
                 <div className="flex items-center justify-between p-1.5 rounded bg-violet-50/50 border border-violet-100/50">
                   <span className="text-violet-600 font-medium">Output</span>
