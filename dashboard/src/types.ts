@@ -24,6 +24,7 @@ export interface RequestLog {
   cache_read_tokens: number;
   cache_write_tokens: number;
   reasoning_tokens: number;
+  agent: string;
 }
 
 export interface Stats {
@@ -69,4 +70,5 @@ export interface FilterState {
   search: string;
   method: string;       // '' = all
   streaming: string;    // '' | 'true' | 'false'
+  agent: string;        // '' | 'copilot' | 'kilo'
 }

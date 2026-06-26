@@ -3,6 +3,7 @@ import { PassThrough } from 'stream';
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { insertLog, getStats } from './db.js';
 import { broadcast } from './websocket.js';
+import { resolveAgentHandler } from './agents/index.js';
 import {
   log,
   logIncomingRequest,
@@ -13,26 +14,9 @@ import {
   logPrettyJson,
   logPrettyBody,
 } from './logger.js';
-//
-
-// ─────────────────────────────────────────────────────────────────────────────
-// When Copilot uses debug.overrideProxyUrl it replaces the API base URL,
-// so requests arrive as  GET /v1/models  with  Host: localhost:4000.
-// We need to know the *real* upstream host to forward to.
-// Override via env:  UPSTREAM_HOST=api.githubcopilot.com
-// ─────────────────────────────────────────────────────────────────────────────
-const UPSTREAM_HOST = process.env.UPSTREAM_HOST ?? 'api.githubcopilot.com';
-
-const LOCALHOST_RE = /^(localhost|127\.0\.0\.1|::1)(:\d+)?$/;
 
 // Max bytes of response body stored in DB (5 MB). Streaming SSE can be huge.
 const MAX_BODY_LOG_BYTES = 5 * 1024 * 1024;
-
-// Headers that must not be forwarded (hop-by-hop)
-const HOP_BY_HOP = new Set([
-  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
-  'te', 'trailers', 'transfer-encoding', 'upgrade', 'proxy-connection',
-]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Parse body as JSON if possible, otherwise return as string
@@ -52,163 +36,6 @@ function parseBodyContent(body: Buffer | null | string): string | object | null 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Extract prompt, completion, and total tokens from response body
-// ─────────────────────────────────────────────────────────────────────────────
-interface TokenUsage {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-  reasoning_tokens: number;
-}
-
-function extractTokenUsage(responseBody: string, isStreaming: boolean): TokenUsage {
-  const result = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0 };
-  if (!responseBody) return result;
-
-  function parseTokenDetails(obj: any): void {
-    if (obj.copilot_usage && Array.isArray(obj.copilot_usage.token_details)) {
-      let input = 0, output = 0;
-      for (const item of obj.copilot_usage.token_details) {
-        const count = Number(item.token_count || 0);
-        if (item.token_type === 'input') {
-          input += count;
-        } else if (item.token_type === 'cache_read') {
-          input += count;
-          result.cache_read_tokens += count;
-        } else if (item.token_type === 'cache_write') {
-          input += count;
-          result.cache_write_tokens += count;
-        } else if (item.token_type === 'output') {
-          output += count;
-        } else if (item.token_type === 'reasoning' || item.token_type === 'thinking') {
-          result.reasoning_tokens += count;
-          output += count;
-        }
-      }
-      result.prompt_tokens = input;
-      result.completion_tokens = output;
-      result.total_tokens = input + output;
-    } else if (obj.usage?.prompt_tokens != null) {
-      result.prompt_tokens = Number(obj.usage.prompt_tokens);
-      result.completion_tokens = Number(obj.usage.completion_tokens || 0);
-      result.total_tokens = Number(obj.usage.total_tokens || 0);
-    } else if (obj.usage?.input_tokens != null) {
-      result.prompt_tokens = Number(obj.usage.input_tokens);
-      result.completion_tokens = Number(obj.usage.output_tokens || 0);
-      result.total_tokens = result.prompt_tokens + result.completion_tokens;
-    }
-  }
-
-  if (isStreaming) {
-    const lines = responseBody.split('\n');
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
-      if (line.startsWith('data: ')) {
-        const jsonStr = line.slice(6).trim();
-        if (jsonStr === '[DONE]') continue;
-        try {
-          const obj = JSON.parse(jsonStr);
-          if (obj && (obj.usage || obj.copilot_usage)) {
-            parseTokenDetails(obj);
-            break;
-          }
-        } catch {
-          // ignore parsing error for individual lines
-        }
-      }
-    }
-  } else {
-    try {
-      const obj = JSON.parse(responseBody);
-      if (obj && (obj.usage || obj.copilot_usage)) {
-        parseTokenDetails(obj);
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return result;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Resolve the real upstream URL
-// ─────────────────────────────────────────────────────────────────────────────
-function resolveUpstreamUrl(req: FastifyRequest): URL {
-  const rawUrl = req.raw.url ?? '/';
-
-  // Case 1: true HTTP-proxy mode — client sends absolute URL in the request line
-  if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
-    const u = new URL(rawUrl);
-    u.protocol = 'https:'; // always upgrade to TLS upstream
-    return u;
-  }
-
-  // Case 2: API-base-override mode — client sends a path-only URL.
-  // Host header will be "localhost:4000" (the proxy itself), so we replace
-  // it with the real upstream host.
-  const hostHeader = (req.headers['host'] as string | undefined) ?? '';
-  const isLocal = LOCALHOST_RE.test(hostHeader);
-  let upstream = isLocal ? UPSTREAM_HOST : hostHeader.replace(/:\d+$/, '');
-
-  // ── Routing logic based on copilot-integration-id ─────────────────────────
-  // The presence/absence of this header tells us which upstream to use.
-  const copilotIntegrationId = (() => {
-    const raw = req.headers['copilot-integration-id'];
-    if (!raw) return null;
-    return Array.isArray(raw) ? raw[0] : raw;
-  })();
-
-  if (!copilotIntegrationId &&
-    /\/completions(?:\?|$)/.test(rawUrl)) {
-    // No copilot-integration-id → implicit Code Completion request.
-    // Must go through proxy.individual.githubcopilot.com
-    upstream = 'proxy.individual.githubcopilot.com';
-  } else {
-    // Chat request with explicit vscode-chat integration ID.
-    // Route to the standard Copilot API endpoint.
-    upstream = 'api.githubcopilot.com';
-  }
-
-  return new URL(`https://${upstream}${rawUrl}`);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Build clean headers for the upstream request
-// ─────────────────────────────────────────────────────────────────────────────
-function buildUpstreamHeaders(req: FastifyRequest, targetUrl: URL): Record<string, string> {
-  const headers: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(req.headers)) {
-    const lk = key.toLowerCase();
-    if (HOP_BY_HOP.has(lk)) continue;
-    if (lk === 'host') continue; // overwritten below
-    if (value === undefined) continue;
-    headers[lk] = Array.isArray(value) ? value.join(', ') : value;
-  }
-
-  headers['host'] = targetUrl.host;
-
-  // Ensure IDE identity headers for Copilot auth are present
-  const hasEditorVersion = Object.keys(headers).some(k => k.toLowerCase() === 'editor-version');
-  const hasPluginVersion = Object.keys(headers).some(k => k.toLowerCase() === 'editor-plugin-version');
-
-  if (!hasEditorVersion) {
-    headers['Editor-Version'] = 'vscode/1.90.0';
-  }
-  if (!hasPluginVersion) {
-    headers['Editor-Plugin-Version'] = 'copilot-chat/0.53.0';
-  }
-
-  // NOTE: Do NOT auto-add Copilot-Integration-Id.
-  // Its absence is the routing signal for Code Completion requests
-  // (see resolveUpstreamUrl). Injecting it here would break that logic.
-
-  return headers;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Main proxy handler
 // ─────────────────────────────────────────────────────────────────────────────
 export async function proxyHandler(
@@ -218,12 +45,18 @@ export async function proxyHandler(
   const startMs = Date.now();
   const timestamp = startMs;
 
+  // ── Detect agent and get handler ──────────────────────────────────────────
+  const { handler, agentName } = resolveAgentHandler(req);
+
   // ── Resolve target ─────────────────────────────────────────────────────────
   let targetUrl: URL;
+  let isCodeCompletion = false;
   try {
-    targetUrl = resolveUpstreamUrl(req);
+    const upstream = handler.resolveUpstream(req);
+    targetUrl = upstream.url;
+    isCodeCompletion = upstream.isCodeCompletion;
   } catch (err) {
-    logError('proxy', 'Could not resolve upstream URL', err);
+    logError('proxy', `[${agentName}] Could not resolve upstream URL`, err);
     return reply.code(502).send({ error: 'Bad upstream URL' });
   }
 
@@ -246,7 +79,7 @@ export async function proxyHandler(
     if (requestBody.length === 0) requestBody = null;
   }
 
-  const requestHeaders = buildUpstreamHeaders(req, targetUrl);
+  const requestHeaders = handler.buildUpstreamHeaders(req, targetUrl);
   if (requestBody) {
     requestHeaders['content-length'] = String(requestBody.length);
   } else {
@@ -258,6 +91,7 @@ export async function proxyHandler(
   const urlStr = targetUrl.toString();
 
   // ── Log full incoming request details ────────────────────────────────────
+  log('info', 'proxy', `[${agentName}] Processing request`);
   logIncomingRequest(method, urlStr, req.headers as any, requestBody ? requestBody.length : null);
   logPrettyJson('REQUEST HEADERS', req.headers);
   if (requestBody && requestBody.length > 0) {
@@ -312,8 +146,8 @@ export async function proxyHandler(
       const parsedRequestBody = parseBodyContent(requestBody);
       const parsedResponseBody = parseBodyContent(_responseBodyBuf);
 
-      const tokenUsage = extractTokenUsage(responseBodyStr, _isStreaming);
-      const isCodeCompletion = host === 'proxy.individual.githubcopilot.com' ? 1 : 0;
+      // Use agent-specific token extraction
+      const tokenUsage = handler.extractTokenUsage(responseBodyStr, _isStreaming);
 
       const logPayload = {
         timestamp,
@@ -332,15 +166,16 @@ export async function proxyHandler(
         prompt_tokens: tokenUsage.prompt_tokens,
         completion_tokens: tokenUsage.completion_tokens,
         total_tokens: tokenUsage.total_tokens,
-        is_code_completion: isCodeCompletion,
+        is_code_completion: isCodeCompletion ? 1 : 0,
         cache_read_tokens: tokenUsage.cache_read_tokens,
         cache_write_tokens: tokenUsage.cache_write_tokens,
         reasoning_tokens: tokenUsage.reasoning_tokens,
+        agent: agentName,
       };
 
       try {
         const id = insertLog(logPayload);
-        logFinish(id, !_errorMessage, `reason=${reason}`);
+        logFinish(id, !_errorMessage, `agent=${agentName} reason=${reason}`);
         broadcast({
           type: 'request_complete',
           log: {
@@ -359,7 +194,7 @@ export async function proxyHandler(
 
   // ── Forward to upstream ────────────────────────────────────────────────────
   try {
-    log('debug', 'proxy', `Forwarding to upstream: ${urlStr}`);
+    log('debug', 'proxy', `[${agentName}] Forwarding to upstream: ${urlStr}`);
     log('debug', 'proxy',
       `requestBody length=${requestBody?.length ?? 'null'}`
     );
@@ -470,7 +305,7 @@ export async function proxyHandler(
       ? err.message
       : (typeof err === 'object' ? JSON.stringify(err) : String(err));
 
-    logError('proxy', `Upstream error on ${method} ${urlStr}`, err);
+    logError('proxy', `[${agentName}] Upstream error on ${method} ${urlStr}`, err);
     finish('upstream-error');
 
     if (!reply.sent) {

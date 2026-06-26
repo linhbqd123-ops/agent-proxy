@@ -62,6 +62,7 @@ export async function buildServer() {
       streaming: q.streaming !== undefined ? q.streaming === 'true' : undefined,
       from:      q.from      ? parseInt(q.from)   : undefined,
       to:        q.to        ? parseInt(q.to)      : undefined,
+      agent:     q.agent     || undefined,
     };
     const result = getLogs(query);
     return reply.send(result);
@@ -131,7 +132,7 @@ export async function buildServer() {
     });
   });
 
-  // ── Catch-all proxy — matches every Copilot request ─────────────────────
+  // ── Catch-all proxy — matches all agent requests ────────────────────────
   // We deliberately skip OPTIONS here because @fastify/cors already registers
   // OPTIONS /* and registering it again throws a duplicate-route error.
   const PROXY_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] as const;

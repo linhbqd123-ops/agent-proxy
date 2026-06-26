@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Copy, Check, Zap, AlertTriangle, Clock, Globe, ArrowUpRight, ExternalLink, Coins } from 'lucide-react';
+import { X, Copy, Check, Zap, AlertTriangle, Clock, Globe, ArrowUpRight, ExternalLink, Coins, Terminal } from 'lucide-react';
 import { format } from 'date-fns';
 import { StreamViewer } from './StreamViewer';
 import type { RequestLog } from '../types';
@@ -87,7 +87,28 @@ function bodyToString(body: string | object | null | undefined): string {
   return JSON.stringify(body, null, 2);
 }
 
-function CopyButton({ text, label = '' }: { text: string; label?: string }) {
+function buildCurl(log: RequestLog): string {
+  const parts: string[] = [`curl -X ${log.method}`];
+
+  try {
+    const headers = JSON.parse(log.request_headers) as Record<string, string>;
+    for (const [k, v] of Object.entries(headers)) {
+      const lk = k.toLowerCase();
+      if (lk === 'host' || lk === 'content-length' || lk === 'connection') continue;
+      parts.push(`  -H '${k}: ${v.replace(/'/g, "'\\''")}'`);
+    }
+  } catch { /* skip */ }
+
+  if (log.request_body) {
+    const body = typeof log.request_body === 'string' ? log.request_body : JSON.stringify(log.request_body);
+    parts.push(`  -d '${body.replace(/'/g, "'\\''")}'`);
+  }
+
+  parts.push(`  '${log.url}'`);
+  return parts.join(' \\\n');
+}
+
+function CopyButton({ text, label = '', icon }: { text: string; label?: string; icon?: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     await navigator.clipboard.writeText(text);
@@ -97,12 +118,12 @@ function CopyButton({ text, label = '' }: { text: string; label?: string }) {
   return (
     <button
       onClick={copy}
-      className="btn-ghost text-xs px-2 py-1"
+      className="btn-ghost text-xs px-2 py-1 flex items-center gap-1"
       title={label ? `Copy ${label}` : 'Copy'}
     >
       {copied
         ? <><Check className="w-3 h-3 text-emerald-500" /> Copied</>
-        : <><Copy className="w-3 h-3" /> Copy</>}
+        : <>{icon || <Copy className="w-3 h-3" />}{label}</>}
     </button>
   );
 }
@@ -216,14 +237,7 @@ export function RequestDetail({ log, onClose }: RequestDetailProps) {
           <Clock className="w-3 h-3" />
           {log.duration_ms.toLocaleString()} ms
         </span>
-        <a
-          href={log.url}
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-1 text-brand-500 hover:text-brand-700 ml-auto transition-colors"
-        >
-          Full URL <ExternalLink className="w-3 h-3" />
-        </a>
+        <CopyButton text={buildCurl(log)} label="cURL" icon={<Terminal className="w-3 h-3" />} />
       </div>
 
       {/* ── Token Usage Visualizer ────────────────────────────────────────── */}

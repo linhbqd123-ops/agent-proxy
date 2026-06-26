@@ -17,7 +17,7 @@ export function Header({ wsStatus }: HeaderProps) {
           </div>
           <div>
             <h1 className="text-sm font-semibold text-slate-800 leading-none">
-              Copilot Traffic Monitor
+              Agents Traffic Monitor
             </h1>
             <p className="text-xs text-slate-400 mt-0.5">
               Proxy on{' '}

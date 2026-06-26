@@ -46,13 +46,15 @@ db.exec(`
     is_code_completion INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
     cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
-    reasoning_tokens    INTEGER NOT NULL DEFAULT 0
+    reasoning_tokens    INTEGER NOT NULL DEFAULT 0,
+    agent            TEXT    NOT NULL DEFAULT 'copilot'
   );
 
   CREATE INDEX IF NOT EXISTS idx_timestamp   ON request_logs(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_method      ON request_logs(method);
   CREATE INDEX IF NOT EXISTS idx_is_streaming ON request_logs(is_streaming);
   CREATE INDEX IF NOT EXISTS idx_status      ON request_logs(response_status);
+  CREATE INDEX IF NOT EXISTS idx_agent       ON request_logs(agent);
 `);
 
 // ── Run migrations for existing DB ──────────────────────────────────────────
@@ -63,6 +65,8 @@ try { db.exec(`ALTER TABLE request_logs ADD COLUMN is_code_completion INTEGER NO
 try { db.exec(`ALTER TABLE request_logs ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
 try { db.exec(`ALTER TABLE request_logs ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
 try { db.exec(`ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER NOT NULL DEFAULT 0;`); } catch (_) {}
+try { db.exec(`ALTER TABLE request_logs ADD COLUMN agent TEXT NOT NULL DEFAULT 'copilot';`); } catch (_) {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_agent ON request_logs(agent);`); } catch (_) {}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Prepared statements
@@ -73,12 +77,12 @@ const stmtInsert = db.prepare(`
     (timestamp, method, url, host, path, request_headers, request_body,
      response_status, response_headers, response_body, duration_ms, is_streaming, error,
      prompt_tokens, completion_tokens, total_tokens,
-     is_code_completion, cache_read_tokens, cache_write_tokens, reasoning_tokens)
+     is_code_completion, cache_read_tokens, cache_write_tokens, reasoning_tokens, agent)
   VALUES
     (@timestamp, @method, @url, @host, @path, @request_headers, @request_body,
      @response_status, @response_headers, @response_body, @duration_ms, @is_streaming, @error,
      @prompt_tokens, @completion_tokens, @total_tokens,
-     @is_code_completion, @cache_read_tokens, @cache_write_tokens, @reasoning_tokens)
+     @is_code_completion, @cache_read_tokens, @cache_write_tokens, @reasoning_tokens, @agent)
 `);
 
 const stmtGetById = db.prepare<[number]>(`
@@ -151,6 +155,10 @@ export function getLogs(query: LogsQuery): { data: RequestLog[]; total: number }
     conditions.push(`(url LIKE ? OR path LIKE ?)`);
     const like = `%${query.search}%`;
     params.push(like, like);
+  }
+  if (query.agent) {
+    conditions.push(`agent = ?`);
+    params.push(query.agent);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';

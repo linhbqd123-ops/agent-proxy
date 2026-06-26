@@ -8,27 +8,33 @@ interface RequestTableProps {
   total: number;
   page: number;
   setPage: (page: number) => void;
+  pageSize: number;
+  setPageSize: (size: number) => void;
   loading: boolean;
   filters: FilterState;
   setFilters: (filters: FilterState) => void;
   onSelect: (log: RequestLog) => void;
   selectedId: number | null;
   onClear: () => void;
+  clearFilters: () => void;
 }
 
-const PAGE_SIZE = 50;
+const PAGE_SIZES = [10, 20, 50, 100];
 
 export function RequestTable({
   logs,
   total,
   page,
   setPage,
+  pageSize,
+  setPageSize,
   loading,
   filters,
   setFilters,
   onSelect,
   selectedId,
   onClear,
+  clearFilters,
 }: RequestTableProps) {
   // Local state for search input to allow debouncing
   const [localSearch, setLocalSearch] = useState(filters.search);
@@ -57,10 +63,14 @@ export function RequestTable({
     setFilters({ ...filters, streaming: e.target.value });
   };
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const handleAgentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setFilters({ ...filters, agent: e.target.value });
+  };
 
-  const startRange = (page - 1) * PAGE_SIZE + 1;
-  const endRange = Math.min(page * PAGE_SIZE, total);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const startRange = (page - 1) * pageSize + 1;
+  const endRange = Math.min(page * pageSize, total);
 
   const getStatusBadgeClass = (status: number, hasError: boolean) => {
     if (hasError || status >= 500) return 'badge-red';
@@ -127,18 +137,89 @@ export function RequestTable({
             <option value="true">SSE (Streaming)</option>
             <option value="false">Standard</option>
           </select>
+
+          {/* Agent Filter */}
+          <select
+            value={filters.agent}
+            onChange={handleAgentChange}
+            className="input pr-8 appearance-none bg-no-repeat bg-[right_0.5rem_center] bg-[length:1.25em_1.25em]"
+            style={{
+              backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+            }}
+          >
+            <option value="">All Agents</option>
+            <option value="kilo">Kilo Code</option>
+            <option value="copilot">GitHub Copilot</option>
+          </select>
+
+          {/* Page Size */}
+          <select
+            value={pageSize}
+            onChange={(e) => setPageSize(Number(e.target.value))}
+            className="input pr-8 appearance-none bg-no-repeat bg-[right_0.5rem_center] bg-[length:1.25em_1.25em]"
+            style={{
+              backgroundImage: `url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e")`,
+            }}
+          >
+            {PAGE_SIZES.map(s => (
+              <option key={s} value={s}>{s} / page</option>
+            ))}
+          </select>
         </div>
 
-        {/* Clear Button */}
-        <button
-          onClick={onClear}
-          className="btn-danger w-full md:w-auto justify-center"
-          title="Clear all recorded requests"
-        >
-          <Trash2 className="w-4 h-4" />
-          Clear All
-        </button>
+        {/* Filter Actions */}
+        <div className="flex gap-2 w-full md:w-auto">
+          {(filters.search || filters.method || filters.streaming || filters.agent) && (
+            <button
+              onClick={clearFilters}
+              className="btn-ghost w-full md:w-auto justify-center text-xs"
+              title="Clear all filters"
+            >
+              Clear Filters
+            </button>
+          )}
+          <button
+            onClick={onClear}
+            className="btn-danger w-full md:w-auto justify-center"
+            title="Clear all recorded requests"
+          >
+            <Trash2 className="w-4 h-4" />
+            Clear All
+          </button>
+        </div>
       </div>
+
+      {/* ── Top Pagination Bar ───────────────────────────────────────────── */}
+      {total > 0 && (
+        <div className="px-4 py-2 border-b border-slate-200 flex items-center justify-between bg-slate-50/50 text-xs text-slate-500">
+          <span>
+            Showing <strong className="font-semibold text-slate-700">{startRange}</strong> to{' '}
+            <strong className="font-semibold text-slate-700">{endRange}</strong> of{' '}
+            <strong className="font-semibold text-slate-700">{total}</strong> requests
+          </span>
+          <div className="flex gap-1">
+            <button
+              onClick={() => setPage(page - 1)}
+              disabled={page <= 1 || loading}
+              className="btn-ghost p-1 disabled:opacity-40 disabled:hover:bg-transparent"
+              title="Previous Page"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+            <span className="flex items-center px-1.5 font-medium text-slate-700">
+              {page}/{totalPages}
+            </span>
+            <button
+              onClick={() => setPage(page + 1)}
+              disabled={page >= totalPages || loading}
+              className="btn-ghost p-1 disabled:opacity-40 disabled:hover:bg-transparent"
+              title="Next Page"
+            >
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Table / Grid Container ───────────────────────────────────────── */}
       <div className="flex-1 overflow-x-auto overflow-y-auto relative min-h-[300px]">
@@ -155,6 +236,7 @@ export function RequestTable({
               <th className="px-4 py-3 font-semibold text-slate-600 w-24">Method</th>
               <th className="px-4 py-3 font-semibold text-slate-600">Path</th>
               <th className="px-4 py-3 font-semibold text-slate-600 w-36">Host</th>
+              <th className="px-4 py-3 font-semibold text-slate-600 w-20">Agent</th>
               <th className="px-4 py-3 font-semibold text-slate-600 w-24 text-right">Duration</th>
               <th className="px-4 py-3 font-semibold text-slate-600 w-20 text-center">Type</th>
               <th className="px-4 py-3 font-semibold text-slate-600 w-32 text-right">Time</th>
@@ -163,7 +245,7 @@ export function RequestTable({
           <tbody className="divide-y divide-slate-100">
             {logs.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                <td colSpan={8} className="px-4 py-12 text-center text-slate-400">
                   <div className="flex flex-col items-center gap-2">
                     <HelpCircle className="w-8 h-8 text-slate-300" />
                     <span>No requests found matching filters.</span>
@@ -209,6 +291,13 @@ export function RequestTable({
                     {/* Host */}
                     <td className="px-4 py-3.5 align-middle text-slate-500 font-mono text-xs truncate max-w-[120px]">
                       {log.host}
+                    </td>
+
+                    {/* Agent */}
+                    <td className="px-4 py-3.5 align-middle">
+                      <span className={log.agent === 'kilo' ? 'badge-violet' : 'badge-blue'}>
+                        {log.agent === 'kilo' ? 'Kilo' : 'Copilot'}
+                      </span>
                     </td>
 
                     {/* Duration */}

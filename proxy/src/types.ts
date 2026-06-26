@@ -20,31 +20,18 @@ export interface RequestLog {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
-  is_code_completion: number; // 0 = chat (api.githubcopilot.com), 1 = code completion (proxy.individual.githubcopilot.com)
+  is_code_completion: number; // 0 = chat, 1 = code completion
   cache_read_tokens: number;
   cache_write_tokens: number;
   reasoning_tokens: number;
+  agent: string;              // agent identifier: 'copilot' | 'kilo' | ...
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WebSocket event payloads broadcast to dashboard clients
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type WsEventType =
-  | 'request_started'
-  | 'request_complete'
-  | 'stats_update';
-
-export interface WsRequestStarted {
-  type: 'request_started';
-  id: number;
-  timestamp: number;
-  method: string;
-  url: string;
-  host: string;
-  path: string;
-  is_streaming: boolean;
-}
+export type WsEventType = 'request_complete' | 'stats_update';
 
 export interface WsRequestComplete {
   type: 'request_complete';
@@ -55,6 +42,8 @@ export interface WsStatsUpdate {
   type: 'stats_update';
   stats: Stats;
 }
+
+export type WsEvent = WsRequestComplete | WsStatsUpdate;
 
 export interface Stats {
   total: number;
@@ -67,15 +56,13 @@ export interface Stats {
   total_cache_read_tokens: number;
   total_cache_write_tokens: number;
   total_reasoning_tokens: number;
-  total_normal_tokens: number;       // tokens from api.githubcopilot.com (chat)
+  total_normal_tokens: number;          // is_code_completion = 0 (chat)
   total_normal_prompt_tokens: number;
   total_normal_completion_tokens: number;
-  total_code_completion_tokens: number; // tokens from proxy.individual.githubcopilot.com
+  total_code_completion_tokens: number; // is_code_completion = 1
   total_cc_prompt_tokens: number;
   total_cc_completion_tokens: number;
 }
-
-export type WsEvent = WsRequestStarted | WsRequestComplete | WsStatsUpdate;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REST API query params
@@ -89,4 +76,5 @@ export interface LogsQuery {
   streaming?: boolean;
   from?: number;  // unix ms
   to?: number;    // unix ms
+  agent?: string; // filter by agent identifier
 }

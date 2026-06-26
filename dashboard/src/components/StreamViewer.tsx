@@ -68,16 +68,6 @@ export function StreamViewer({ body, isStreaming }: StreamViewerProps) {
           </div>
         </div>
       )}
-
-      {/* Raw SSE frames */}
-      <div>
-        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
-          Raw SSE frames <span className="text-slate-400 normal-case font-normal">({tokens.length} tokens)</span>
-        </p>
-        <pre className="font-mono text-xs text-slate-400 whitespace-pre-wrap break-all leading-relaxed max-h-52 overflow-y-auto bg-white border border-slate-200 rounded-lg p-3">
-          {bodyStr || <span className="italic text-slate-300">empty</span>}
-        </pre>
-      </div>
     </div>
   );
 }

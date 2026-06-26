@@ -7,16 +7,20 @@ const RECONNECT_DELAY_MS = 2000;
 export type WsStatus = 'connecting' | 'connected' | 'disconnected';
 
 export interface UseWebSocketReturn {
-  lastEvent: WsEvent | null;
+  onEvent: (cb: (evt: WsEvent) => void) => void;
   status: WsStatus;
 }
 
 export function useWebSocket(): UseWebSocketReturn {
-  const [lastEvent, setLastEvent] = useState<WsEvent | null>(null);
   const [status, setStatus] = useState<WsStatus>('connecting');
   const wsRef = useRef<WebSocket | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unmountedRef = useRef(false);
+  const handlerRef = useRef<(evt: WsEvent) => void>(() => {});
+
+  const onEvent = useCallback((cb: (evt: WsEvent) => void) => {
+    handlerRef.current = cb;
+  }, []);
 
   const connect = useCallback(() => {
     if (unmountedRef.current) return;
@@ -35,7 +39,7 @@ export function useWebSocket(): UseWebSocketReturn {
       if (unmountedRef.current) return;
       try {
         const parsed = JSON.parse(event.data as string) as WsEvent;
-        setLastEvent(parsed);
+        handlerRef.current(parsed);
       } catch {
         // ignore malformed messages
       }
@@ -64,5 +68,5 @@ export function useWebSocket(): UseWebSocketReturn {
     };
   }, [connect]);
 
-  return { lastEvent, status };
+  return { onEvent, status };
 }

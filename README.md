@@ -1,21 +1,27 @@
-# Copilot Traffic Monitor
+# Agent Traffic Proxy
 
-A transparent HTTP proxy that sits between **VSCode GitHub Copilot** and the GitHub backend, capturing every request and response for real-time observability — with zero modification to traffic.
+A transparent HTTP proxy that sits between **VSCode coding agents** (GitHub Copilot, Kilo Code, etc.) and their upstream APIs, capturing every request and response for real-time observability — with zero modification to traffic.
 
 ---
 
 ## What it does
 
 ```
-VSCode Copilot
+VSCode (Copilot / Kilo / ...)
      │
      ▼  http://localhost:4000   (plain HTTP from VSCode)
-┌──────────────────────────┐
-│  Proxy  (Fastify + Undici)│  → forwards to https://api.githubcopilot.com
-│  port 4000                │  ← streams response back unchanged
-│                           │  ← saves to SQLite
-│                           │  ← broadcasts via WebSocket
-└────────────┬──────────────┘
+┌──────────────────────────────────────┐
+│  Proxy  (Fastify + Undici)           │
+│  port 4000                           │
+│                                      │
+│  ┌─ Agent Factory ──────────────┐    │
+│  │  detect via User-Agent header│    │
+│  │  → CopilotHandler            │    │  → https://api.githubcopilot.com
+│  │  → KiloHandler               │    │  → https://mkp-api.fptcloud.com
+│  └──────────────────────────────┘    │
+│                                      │
+│  saves to SQLite · broadcasts WS     │
+└────────────┬─────────────────────────┘
              │  ws://localhost:4000/ws
              ▼
 ┌──────────────────────────┐
@@ -36,7 +42,7 @@ VSCode Copilot
 ## Project structure
 
 ```
-myLitellm/
+agent-proxy/
 ├── package.json            root — npm workspaces + concurrently
 ├── tsconfig.base.json      shared TS config
 │
@@ -46,10 +52,18 @@ myLitellm/
 │   └── src/
 │       ├── index.ts        entry point, startup banner
 │       ├── server.ts       Fastify setup, REST API + catch-all proxy route
-│       ├── proxy.ts        transparent proxy handler (Undici)
+│       ├── proxy.ts        shared proxy handler (body capture, stream, persist)
+│       ├── config.ts       agent upstream URL config
 │       ├── db.ts           SQLite schema + queries (better-sqlite3)
 │       ├── websocket.ts    WebSocket broadcast (ws library)
-│       └── types.ts        shared TypeScript types
+│       ├── logger.ts       colorized console logger
+│       ├── types.ts        shared TypeScript types
+│       └── agents/
+│           ├── types.ts    AgentHandler interface
+│           ├── factory.ts  detect agent from headers → return handler
+│           ├── copilot.ts  GitHub Copilot routing + token extraction
+│           ├── kilo.ts     Kilo Code routing + token extraction
+│           └── index.ts    barrel export
 │
 └── dashboard/              Frontend (React 18 / Vite / Tailwind)
     ├── package.json
@@ -101,7 +115,9 @@ This runs both workspaces concurrently:
 
 > The proxy must be running before the dashboard is useful.
 
-### 3. Configure VSCode
+### 3. Configure your agent
+
+#### GitHub Copilot
 
 Open your VSCode **settings.json** (`Ctrl+Shift+P` → *Open User Settings (JSON)*) and add:
 
@@ -115,7 +131,17 @@ Open your VSCode **settings.json** (`Ctrl+Shift+P` → *Open User Settings (JSON
 }
 ```
 
-Save the file. VSCode will immediately start routing Copilot traffic through the proxy.
+#### Kilo Code
+
+In VSCode, open Kilo Code settings → **Providers** → **Custom provider** and set:
+
+| Field | Value |
+|---|---|
+| **Base URL** | `http://localhost:4000/v1` |
+| **API Key** | *(your FPT Cloud API key)* |
+| **Model** | *(your model name)* |
+
+Kilo Code sends `User-Agent: Kilo-Code/<version>` on all requests — the proxy uses this to route traffic to `https://mkp-api.fptcloud.com/v1`.
 
 ### 4. Trigger traffic
 

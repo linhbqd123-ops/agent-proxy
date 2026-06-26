@@ -8,12 +8,12 @@ import { useRequests } from './hooks/useRequests';
 import type { RequestLog } from './types';
 
 export default function App() {
-  const { lastEvent, status: wsStatus } = useWebSocket();
+  const { onEvent, status: wsStatus } = useWebSocket();
   const {
-    logs, stats, total, page, setPage,
+    logs, stats, total, page, setPage, pageSize, setPageSize,
     filters, setFilters,
-    loading, clearAll,
-  } = useRequests(lastEvent);
+    loading, clearAll, clearFilters,
+  } = useRequests(onEvent);
 
   const [selectedLog, setSelectedLog] = useState<RequestLog | null>(null);
 
@@ -47,12 +47,15 @@ export default function App() {
               total={total}
               page={page}
               setPage={setPage}
+              pageSize={pageSize}
+              setPageSize={setPageSize}
               loading={loading}
               filters={filters}
               setFilters={setFilters}
               onSelect={handleSelect}
               selectedId={selectedLog?.id ?? null}
               onClear={handleClear}
+              clearFilters={clearFilters}
             />
           </div>
 
